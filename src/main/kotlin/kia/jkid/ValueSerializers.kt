@@ -1,27 +1,35 @@
 package kia.jkid
 
 import kia.jkid.deserialization.JKidException
+import kia.jkid.exercise.DateFormat
+import kotlin.reflect.KAnnotatedElement
 import kotlin.reflect.KType
+import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.typeOf
+import java.text.ParseException
+import java.text.SimpleDateFormat
+import java.util.Date
 
 fun serializerForBasicType(type: KType): ValueSerializer<out Any?> {
     assert(type.isPrimitiveOrString()) { "Expected primitive type or String: $type" }
     return serializerForType(type)!!
 }
 
-fun serializerForType(type: KType): ValueSerializer<out Any?>? =
-        when (type) {
-            typeOf<Byte>() -> ByteSerializer
-            typeOf<Short>() -> ShortSerializer
-            typeOf<Int>() -> IntSerializer
-            typeOf<Long>() -> LongSerializer
-            typeOf<Float>() -> FloatSerializer
-            typeOf<Double>() -> DoubleSerializer
-            typeOf<Boolean>() -> BooleanSerializer
-            typeOf<String>(),
-            typeOf<String?>() -> StringSerializer
-            else -> null
-        }
+@Suppress("UNCHECKED_CAST")
+fun serializerForType(type: KType, element: KAnnotatedElement? = null): ValueSerializer<Any?>? =
+    when (type) {
+        typeOf<Byte>() -> ByteSerializer
+        typeOf<Short>() -> ShortSerializer
+        typeOf<Int>() -> IntSerializer
+        typeOf<Long>() -> LongSerializer
+        typeOf<Float>() -> FloatSerializer
+        typeOf<Double>() -> DoubleSerializer
+        typeOf<Boolean>() -> BooleanSerializer
+        typeOf<String>(),
+        typeOf<String?>() -> StringSerializer
+        typeOf<Date>() -> DateSerializer(element)
+        else -> null
+    } as ValueSerializer<Any?>?
 
 private fun Any?.expectNumber(): Number {
     if (this !is Number) throw JKidException("Expected number, was: $this")
@@ -74,4 +82,27 @@ object StringSerializer : ValueSerializer<String?> {
     }
 
     override fun toJsonValue(value: String?) = value
+}
+
+class DateSerializer(annotatedElement: KAnnotatedElement? = null) : ValueSerializer<Date> {
+
+    private val dateFormat = SimpleDateFormat(
+        annotatedElement?.findAnnotation<DateFormat>()?.format
+            ?: "yyyy-MM-dd"
+    )
+
+    override fun fromJsonValue(jsonValue: Any?): Date {
+        if (jsonValue == null) throw JKidException("Cannot deserialize date from 'null'")
+        if (jsonValue !is String) throw JKidException("Expected a string-serialized date, but was: $jsonValue")
+
+        return try {
+            dateFormat.parse(jsonValue)
+        } catch (e: ParseException) {
+            throw JKidException("Something went wrong while parsing date $jsonValue: ${e.message}")
+        }
+    }
+
+    override fun toJsonValue(value: Date): Any? {
+        return dateFormat.format(value)
+    }
 }

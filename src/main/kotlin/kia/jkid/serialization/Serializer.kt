@@ -4,7 +4,9 @@ import kia.jkid.CustomSerializer
 import kia.jkid.JsonExclude
 import kia.jkid.JsonName
 import kia.jkid.ValueSerializer
+import kia.jkid.deserialization.JKidException
 import kia.jkid.joinToStringBuilder
+import kia.jkid.serializerForType
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty
 import kotlin.reflect.KProperty1
@@ -44,19 +46,32 @@ private fun StringBuilder.serializeProperty(
     append(": ")
 
     val value = prop.get(obj)
-    val jsonValue = prop.getSerializer()?.toJsonValue(value) ?: value
+    val propertySerializer = prop.getCustomSerializer() ?: serializerForType(prop.returnType, prop)
+    val jsonValue = propertySerializer?.toJsonValue(value) ?: value
     serializePropertyValue(jsonValue)
 }
 
-fun KProperty<*>.getSerializer(): ValueSerializer<Any?>? {
+fun KProperty<*>.getCustomSerializer(): ValueSerializer<Any?>? {
     val customSerializerAnn = findAnnotation<CustomSerializer>() ?: return null
     val serializerClass = customSerializerAnn.serializerClass
 
-    val valueSerializer = serializerClass.objectInstance
-        ?: serializerClass.createInstance()
+    val valueSerializer = serializerClass.objectInstance ?: serializerClass.createClassInstance()
     @Suppress("UNCHECKED_CAST")
     return valueSerializer as ValueSerializer<Any?>
 }
+
+// Create an instance of a class implementing [ValueSerializer]. The class to be instantiated is expected to be a
+// class with a constructor accepting [KAnnotatedElement] or a class with no-param constructor.
+private fun KClass<*>.createClassInstance() = constructors.firstOrNull()?.let {
+    check(it.parameters.size <= 1) { "Only ValueSerializer implementation accepting 0 or 1 constructor parameter are supported" }
+
+    val constructorParam = it.parameters.firstOrNull()?.to(this)?.let { entry -> mapOf(entry) }
+
+    if (constructorParam != null) {
+        it.callBy(constructorParam)
+    }
+    else null
+} ?: createInstance()
 
 private fun StringBuilder.serializePropertyValue(value: Any?) {
     when (value) {
@@ -64,6 +79,7 @@ private fun StringBuilder.serializePropertyValue(value: Any?) {
         is String -> serializeString(value)
         is Number, is Boolean -> append(value.toString())
         is List<*> -> serializeList(value)
+        is Map<*, *> -> serializeMap(value)
         else -> serializeObject(value)
     }
 }
@@ -72,6 +88,21 @@ private fun StringBuilder.serializeList(data: List<Any?>) {
     data.joinToStringBuilder(this, prefix = "[", postfix = "]") {
         serializePropertyValue(it)
     }
+}
+
+private fun StringBuilder.serializeMap(data: Map<*, *>) {
+    append("{")
+    data.keys.forEachIndexed { index, key ->
+        if (key == null) return@forEachIndexed
+        if (key !is String) throw JKidException("Cannot serialize a Map with non-string keys")
+
+        serializeString(key)
+        append(": ")
+        serializePropertyValue(data[key])
+
+        if (index < data.keys.size - 1) append(", ")
+    }
+    append("}")
 }
 
 private fun StringBuilder.serializeString(s: String) {
